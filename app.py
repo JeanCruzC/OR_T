@@ -5,18 +5,22 @@ from ortools.sat.python import cp_model
 import datetime
 from io import BytesIO
 
+# Length of each time slot in minutes. Set via UI in the Streamlit app.
+DEFAULT_SLOT_MINUTES = 60
+
 # ------------------------ Helper functions ------------------------
 
 
-def load_demand(uploaded_file: bytes) -> pd.DataFrame:
+def load_demand(uploaded_file: bytes, slot_minutes: int) -> pd.DataFrame:
     """Load Excel file with columns Day, Slot, Demand.
 
     The input may contain English headers (``Day``, ``Slot``, ``Demand``) or the
     Spanish headers ``D\u00eda``, ``Horario`` and ``Suma de Agentes Requeridos Erlang``.
-    ``Horario`` values such as ``"00:00"`` are converted to slot numbers ``1`` through ``24``.
+    ``Horario`` values such as ``"00:00"`` are converted to slot numbers starting at ``1``.
     """
 
     df = pd.read_excel(uploaded_file)
+    slots_per_day = 24 * 60 // slot_minutes
 
     # Map Spanish column names to English
     col_map = {
@@ -32,16 +36,27 @@ def load_demand(uploaded_file: bytes) -> pd.DataFrame:
             if pd.isna(v):
                 raise ValueError("Horario contains invalid values")
             if isinstance(v, (pd.Timestamp, datetime.datetime, datetime.time)):
-                hour = v.hour
+                h = v.hour
+                m = v.minute
             elif isinstance(v, (int, float)) and not isinstance(v, bool):
                 # Excel times may come as fractional days
-                hour = int(float(v) * 24) % 24
+                total_minutes = int(round(float(v) * 24 * 60)) % (24 * 60)
+                h, m = divmod(total_minutes, 60)
             else:
                 s = str(v).strip()
-                hour = int(s.split(":")[0])
-            slot = hour + 1
-            if not 1 <= slot <= 24:
-                raise ValueError(f"Invalid hour '{v}' in Horario")
+                parts = s.split(":")
+                h = int(parts[0])
+                m = int(parts[1]) if len(parts) > 1 else 0
+            total_minutes = h * 60 + m
+            if not 0 <= total_minutes < 24 * 60:
+                raise ValueError(f"Invalid time '{v}' in Horario")
+            if total_minutes % slot_minutes != 0:
+                raise ValueError(
+                    f"Time '{v}' does not align with {slot_minutes}-minute slots"
+                )
+            slot = total_minutes // slot_minutes + 1
+            if not 1 <= slot <= slots_per_day:
+                raise ValueError(f"Invalid time '{v}' in Horario")
             return slot
 
         df["Slot"] = df["Horario"].apply(_to_slot)
@@ -53,10 +68,12 @@ def load_demand(uploaded_file: bytes) -> pd.DataFrame:
     # Validate day and slot ranges
     if not df["Day"].between(1, 7).all():
         raise ValueError("Day values must be between 1 and 7")
+    if not df["Slot"].between(1, slots_per_day).all():
+        raise ValueError(f"Slot values must be between 1 and {slots_per_day}")
 
     slot_counts = df.groupby("Day")["Slot"].nunique()
-    if (slot_counts != 24).any():
-        raise ValueError("Each day must contain 24 unique slots")
+    if (slot_counts != slots_per_day).any():
+        raise ValueError(f"Each day must contain {slots_per_day} unique slots")
 
     df = df.sort_values(["Day", "Slot"]).reset_index(drop=True)
     return df
@@ -170,6 +187,7 @@ def main():
     st.title("Workforce Scheduling with OR-Tools")
 
     st.sidebar.header("Configuration")
+    slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
     ft_daily_hours = st.sidebar.number_input("FT Daily Hours", 6, 12, value=8)
     pt_daily_hours = st.sidebar.number_input("PT Daily Hours", 2, 8, value=4)
     ft_weekly_hours = st.sidebar.number_input("FT Weekly Hours", 30, 60, value=40)
@@ -182,11 +200,14 @@ def main():
         "Break Window End (slot offset)", break_window_start + break_length, 8, value=5
     )
 
+    slots_per_day = 24 * 60 // slot_minutes
+    factor = 60 // slot_minutes
+
     uploaded_file = st.file_uploader("Upload Demand Excel", type=["xlsx", "xls"])
 
     if uploaded_file is not None:
         try:
-            df = load_demand(uploaded_file)
+            df = load_demand(uploaded_file, slot_minutes)
             st.write("Demand data", df)
         except Exception as e:
             st.error(f"Failed to load data: {e}")
@@ -196,10 +217,10 @@ def main():
             with st.spinner("Generating patterns..."):
                 patterns = generate_patterns(
                     df,
-                    ft_daily_hours,
-                    pt_daily_hours,
-                    ft_weekly_hours,
-                    pt_weekly_hours,
+                    int(ft_daily_hours * factor),
+                    int(pt_daily_hours * factor),
+                    int(ft_weekly_hours * factor),
+                    int(pt_weekly_hours * factor),
                     break_length,
                     break_window_start,
                     break_window_end,
@@ -234,12 +255,12 @@ def main():
                     pattern = u["pattern"]
                     for _ in range(u["count"]):
                         eid = f"E{emp_id:03d}"
-                        daily_hours = (
-                            ft_daily_hours
+                        daily_slots = (
+                            int(ft_daily_hours * factor)
                             if pattern["type"] == "FT"
-                            else pt_daily_hours
+                            else int(pt_daily_hours * factor)
                         )
-                        end = pattern["start"] + daily_hours - 1
+                        end = pattern["start"] + daily_slots - 1
                         for d in pattern["days"]:
                             schedule_rows.append(
                                 {
@@ -295,13 +316,13 @@ def main():
                 st.line_chart(pivot)
 
                 # --- Efficiency summary ---
-                demand_hours = cov_df["Demand"].sum()
+                demand_hours = cov_df["Demand"].sum() * slot_minutes / 60
                 demand_met = (
                     cov_df[["Scheduled", "Demand"]]
                     .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
-                    .sum()
+                    .sum() * slot_minutes / 60
                 )
-                agent_hours = cov_df["Scheduled"].sum()
+                agent_hours = cov_df["Scheduled"].sum() * slot_minutes / 60
 
                 eff_coverage = demand_met / demand_hours * 100 if demand_hours else 0
                 eff_util = demand_met / agent_hours * 100 if agent_hours else 0
