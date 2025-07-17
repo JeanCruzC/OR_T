@@ -2,15 +2,59 @@ import streamlit as st
 import pandas as pd
 from itertools import combinations
 from ortools.sat.python import cp_model
+import datetime
 
 # ------------------------ Helper functions ------------------------
 
 def load_demand(uploaded_file: bytes) -> pd.DataFrame:
-    """Load Excel file with columns Day, Slot, Demand."""
+    """Load Excel file with columns Day, Slot, Demand.
+
+    The input may contain English headers (``Day``, ``Slot``, ``Demand``) or the
+    Spanish headers ``D\u00eda``, ``Horario`` and ``Suma de Agentes Requeridos Erlang``.
+    ``Horario`` values such as ``"00:00"`` are converted to slot numbers ``1`` through ``24``.
+    """
+
     df = pd.read_excel(uploaded_file)
+
+    # Map Spanish column names to English
+    col_map = {
+        "D\u00eda": "Day",
+        "Suma de Agentes Requeridos Erlang": "Demand",
+    }
+    df = df.rename(columns=col_map)
+
+    # Parse "Horario" column to slot number if present
+    if "Slot" not in df.columns and "Horario" in df.columns:
+        def _to_slot(v):
+            if pd.isna(v):
+                raise ValueError("Horario contains invalid values")
+            if isinstance(v, (pd.Timestamp, datetime.datetime, datetime.time)):
+                hour = v.hour
+            elif isinstance(v, (int, float)) and not isinstance(v, bool):
+                # Excel times may come as fractional days
+                hour = int(float(v) * 24) % 24
+            else:
+                s = str(v).strip()
+                hour = int(s.split(":")[0])
+            slot = hour + 1
+            if not 1 <= slot <= 24:
+                raise ValueError(f"Invalid hour '{v}' in Horario")
+            return slot
+
+        df["Slot"] = df["Horario"].apply(_to_slot)
+
     required_cols = {"Day", "Slot", "Demand"}
     if not required_cols.issubset(df.columns):
         raise ValueError(f"Excel must contain columns {required_cols}")
+
+    # Validate day and slot ranges
+    if not df["Day"].between(1, 7).all():
+        raise ValueError("Day values must be between 1 and 7")
+
+    slot_counts = df.groupby("Day")["Slot"].nunique()
+    if (slot_counts != 24).any():
+        raise ValueError("Each day must contain 24 unique slots")
+
     df = df.sort_values(["Day", "Slot"]).reset_index(drop=True)
     return df
 
