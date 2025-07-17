@@ -3,8 +3,10 @@ import pandas as pd
 from itertools import combinations
 from ortools.sat.python import cp_model
 import datetime
+from io import BytesIO
 
 # ------------------------ Helper functions ------------------------
+
 
 def load_demand(uploaded_file: bytes) -> pd.DataFrame:
     """Load Excel file with columns Day, Slot, Demand.
@@ -25,6 +27,7 @@ def load_demand(uploaded_file: bytes) -> pd.DataFrame:
 
     # Parse "Horario" column to slot number if present
     if "Slot" not in df.columns and "Horario" in df.columns:
+
         def _to_slot(v):
             if pd.isna(v):
                 raise ValueError("Horario contains invalid values")
@@ -85,7 +88,9 @@ def generate_patterns(
     # Full-time patterns with break positions
     for combo in day_combos(ft_days):
         for start in range(1, S - ft_daily_hours + 2):
-            for brk in range(start + break_window_start, start + break_window_end - break_length + 2):
+            for brk in range(
+                start + break_window_start, start + break_window_end - break_length + 2
+            ):
                 coverage = []
                 for d in combo:
                     for s in range(start, start + ft_daily_hours):
@@ -159,6 +164,7 @@ def solve_schedule(demand_df: pd.DataFrame, patterns):
 
 # ------------------------ Streamlit App ------------------------
 
+
 def main():
     st.title("Workforce Scheduling with OR-Tools")
 
@@ -220,6 +226,54 @@ def main():
                     )
                 st.dataframe(pd.DataFrame(res_rows))
 
+                # --- Detailed schedule with employee IDs ---
+                schedule_rows = []
+                emp_id = 1
+                for u in used:
+                    pattern = u["pattern"]
+                    for _ in range(u["count"]):
+                        eid = f"E{emp_id:03d}"
+                        daily_hours = (
+                            ft_daily_hours
+                            if pattern["type"] == "FT"
+                            else pt_daily_hours
+                        )
+                        end = pattern["start"] + daily_hours - 1
+                        for d in pattern["days"]:
+                            schedule_rows.append(
+                                {
+                                    "EmployeeID": eid,
+                                    "Day": d,
+                                    "Start": pattern["start"],
+                                    "End": end,
+                                    "BreakStart": (
+                                        pattern["break"]
+                                        if pattern["type"] == "FT"
+                                        else None
+                                    ),
+                                }
+                            )
+                        emp_id += 1
+                schedule_df = pd.DataFrame(schedule_rows)
+                st.dataframe(schedule_df)
+
+                csv = schedule_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "Download schedule CSV",
+                    csv,
+                    "schedule.csv",
+                    "text/csv",
+                )
+
+                xlsx = BytesIO()
+                schedule_df.to_excel(xlsx, index=False)
+                st.download_button(
+                    "Download schedule Excel",
+                    xlsx.getvalue(),
+                    "schedule.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+
                 # --- Compute scheduled coverage per (Day, Slot) ---
                 cov_df = df.copy()
                 cov_df["Scheduled"] = 0
@@ -227,7 +281,9 @@ def main():
                     pattern = u["pattern"]
                     count = u["count"]
                     for d, s in pattern["coverage"]:
-                        cov_df.loc[(cov_df["Day"] == d) & (cov_df["Slot"] == s), "Scheduled"] += count
+                        cov_df.loc[
+                            (cov_df["Day"] == d) & (cov_df["Slot"] == s), "Scheduled"
+                        ] += count
 
                 cov_df["Coverage %"] = cov_df["Scheduled"] / cov_df["Demand"] * 100
 
@@ -239,16 +295,26 @@ def main():
 
                 # --- Efficiency summary ---
                 demand_hours = cov_df["Demand"].sum()
-                demand_met = (cov_df[["Scheduled", "Demand"]]
-                              .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
-                              .sum())
+                demand_met = (
+                    cov_df[["Scheduled", "Demand"]]
+                    .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
+                    .sum()
+                )
                 agent_hours = cov_df["Scheduled"].sum()
 
                 eff_coverage = demand_met / demand_hours * 100 if demand_hours else 0
                 eff_util = demand_met / agent_hours * 100 if agent_hours else 0
 
-                st.metric("Demand Hours Covered", f"{demand_met:.1f} / {demand_hours}", f"{eff_coverage:.1f}%")
-                st.metric("Agent Hour Utilization", f"{demand_met:.1f} / {agent_hours}", f"{eff_util:.1f}%")
+                st.metric(
+                    "Demand Hours Covered",
+                    f"{demand_met:.1f} / {demand_hours}",
+                    f"{eff_coverage:.1f}%",
+                )
+                st.metric(
+                    "Agent Hour Utilization",
+                    f"{demand_met:.1f} / {agent_hours}",
+                    f"{eff_util:.1f}%",
+                )
 
 
 if __name__ == "__main__":
