@@ -5,6 +5,12 @@ from ortools.sat.python import cp_model
 import datetime
 from io import BytesIO
 
+# Suggested hour distributions for optional full-time patterns
+FT_PATTERNS = [
+    [12, 12, 12, 12],
+    [10, 10, 10, 10, 8],
+]
+
 # ------------------------ Helper functions ------------------------
 
 
@@ -71,6 +77,7 @@ def generate_patterns(
     break_length: int,
     break_window_start: int,
     break_window_end: int,
+    ft_hour_patterns=None,
 ):
     """Generate possible weekly patterns for FT and PT employees."""
     days = sorted(df["Day"].unique())
@@ -82,31 +89,49 @@ def generate_patterns(
     def day_combos(num_days):
         return list(combinations(days, num_days)) if num_days <= len(days) else []
 
-    ft_days = ft_weekly_hours // ft_daily_hours
+    ft_distributions = []
+    if ft_hour_patterns:
+        for dist in ft_hour_patterns:
+            if sum(dist) == ft_weekly_hours:
+                ft_distributions.append(dist)
+    else:
+        ft_days = ft_weekly_hours // ft_daily_hours
+        ft_distributions.append([ft_daily_hours] * ft_days)
+
     pt_days = pt_weekly_hours // pt_daily_hours
 
     # Full-time patterns with break positions
-    for combo in day_combos(ft_days):
-        for start in range(1, S - ft_daily_hours + 2):
-            for brk in range(
-                start + break_window_start, start + break_window_end - break_length + 2
-            ):
-                coverage = []
-                for d in combo:
-                    for s in range(start, start + ft_daily_hours):
-                        if not (brk <= s < brk + break_length):
-                            coverage.append((d, s))
-                patterns.append(
-                    {
-                        "id": p_id,
-                        "type": "FT",
-                        "days": combo,
-                        "start": start,
-                        "break": brk,
-                        "coverage": set(coverage),
-                    }
-                )
-                p_id += 1
+    for dist in ft_distributions:
+        for combo in day_combos(len(dist)):
+            for start in range(1, S - max(dist) + 2):
+                for brk in range(
+                    start + break_window_start,
+                    start + break_window_end - break_length + 2,
+                ):
+                    coverage = []
+                    valid = True
+                    for day, hrs in zip(combo, dist):
+                        end = start + hrs - 1
+                        if brk + break_length - 1 > end:
+                            valid = False
+                            break
+                        for s in range(start, start + hrs):
+                            if not (brk <= s < brk + break_length):
+                                coverage.append((day, s))
+                    if not valid:
+                        continue
+                    patterns.append(
+                        {
+                            "id": p_id,
+                            "type": "FT",
+                            "days": combo,
+                            "start": start,
+                            "break": brk,
+                            "coverage": set(coverage),
+                            "hours": dist,
+                        }
+                    )
+                    p_id += 1
 
     # Part-time patterns (no break)
     for combo in day_combos(pt_days):
@@ -180,6 +205,7 @@ def main():
     break_window_end = st.sidebar.number_input(
         "Break Window End (slot offset)", break_window_start + break_length, 8, value=5
     )
+    use_ft_templates = st.sidebar.checkbox("Use suggested FT patterns")
 
     uploaded_file = st.file_uploader("Upload Demand Excel", type=["xlsx", "xls"])
 
@@ -202,6 +228,7 @@ def main():
                     break_length,
                     break_window_start,
                     break_window_end,
+                    FT_PATTERNS if use_ft_templates else None,
                 )
             st.success(f"Generated {len(patterns)} patterns")
 
@@ -233,13 +260,14 @@ def main():
                     pattern = u["pattern"]
                     for _ in range(u["count"]):
                         eid = f"E{emp_id:03d}"
-                        daily_hours = (
-                            ft_daily_hours
-                            if pattern["type"] == "FT"
-                            else pt_daily_hours
-                        )
-                        end = pattern["start"] + daily_hours - 1
-                        for d in pattern["days"]:
+                        if pattern["type"] == "FT" and "hours" in pattern:
+                            hours_list = pattern["hours"]
+                        else:
+                            base = ft_daily_hours if pattern["type"] == "FT" else pt_daily_hours
+                            hours_list = [base] * len(pattern["days"])
+
+                        for d, hrs in zip(pattern["days"], hours_list):
+                            end = pattern["start"] + hrs - 1
                             schedule_rows.append(
                                 {
                                     "EmployeeID": eid,
