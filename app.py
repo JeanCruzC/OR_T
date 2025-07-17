@@ -243,21 +243,23 @@ def main():
     if "pt_weekly_hours" not in st.session_state:
         st.session_state.pt_weekly_hours = 20
 
-    if "template_select" not in st.session_state:
-        st.session_state.template_select = "Custom"
+    if "template" not in st.session_state:
+        st.session_state.template = "Custom"
 
     def on_template_change():
-        name = st.session_state.template_select
+        name = st.session_state.template
         cfg = TEMPLATES.get(name)
         if cfg:
-            st.session_state.ft_daily_hours_input = ",".join(map(str, cfg["ft"]))
-            st.session_state.pt_daily_hours_input = ",".join(map(str, cfg["pt"]))
+            st.session_state.ft_daily_hours_input = ", ".join(map(str, cfg["ft"]))
+            st.session_state.pt_daily_hours_input = ", ".join(map(str, cfg["pt"]))
+            st.session_state.ft_weekly_hours = sum(cfg["ft"])
+            st.session_state.pt_weekly_hours = sum(cfg["pt"])
 
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
     st.sidebar.selectbox(
         "Template",
         list(TEMPLATES.keys()),
-        key="template_select",
+        key="template",
         on_change=on_template_change,
     )
     ft_daily_hours = st.sidebar.text_input(
@@ -311,7 +313,7 @@ def main():
                     nums.extend([0] * (days_cnt - len(nums)))
                 return nums[:days_cnt]
 
-            selected_template = st.session_state.template_select
+            selected_template = st.session_state.template
             cfg = TEMPLATES.get(selected_template)
             if cfg is None:
                 ft_list = _parse_list(ft_daily_hours)
