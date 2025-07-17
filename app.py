@@ -220,35 +220,56 @@ def main():
 
     st.sidebar.header("Configuration")
 
-    if "ft_daily_hours" not in st.session_state:
-        st.session_state.ft_daily_hours = 8
-    if "pt_daily_hours" not in st.session_state:
-        st.session_state.pt_daily_hours = 4
+    if "ft_daily_hours_input" not in st.session_state:
+        st.session_state.ft_daily_hours_input = "8"
+    if "pt_daily_hours_input" not in st.session_state:
+        st.session_state.pt_daily_hours_input = "4"
     if "ft_weekly_hours" not in st.session_state:
         st.session_state.ft_weekly_hours = 40
     if "pt_weekly_hours" not in st.session_state:
         st.session_state.pt_weekly_hours = 20
 
+    templates = {
+        "Custom": None,
+        "4x12 FT / 6,6,4,4,4 PT": {
+            "ft": [12, 12, 12, 12],
+            "pt": [6, 6, 4, 4, 4],
+        },
+        "10,10,10,10,8 FT / 6,6,4,4,4 PT": {
+            "ft": [10, 10, 10, 10, 8],
+            "pt": [6, 6, 4, 4, 4],
+        },
+    }
+
     def apply_template():
-        if st.session_state.template == "48h FT / 24h PT":
-            st.session_state.ft_daily_hours = 8
-            st.session_state.ft_weekly_hours = 48
-            st.session_state.pt_daily_hours = 4
-            st.session_state.pt_weekly_hours = 24
+        cfg = templates.get(st.session_state.template)
+        if cfg:
+            st.session_state.ft_daily_hours_input = ", ".join(
+                map(str, cfg["ft"])
+            )
+            st.session_state.pt_daily_hours_input = ", ".join(
+                map(str, cfg["pt"])
+            )
+            st.session_state.ft_weekly_hours = sum(cfg["ft"])
+            st.session_state.pt_weekly_hours = sum(cfg["pt"])
 
     st.sidebar.selectbox(
         "Shift Template",
-        ["Custom", "48h FT / 24h PT"],
+        list(templates.keys()),
         key="template",
         on_change=apply_template,
     )
 
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
-    ft_daily_hours = st.sidebar.number_input(
-        "FT Daily Hours", 6, 12, value=8, key="ft_daily_hours"
+    ft_daily_hours = st.sidebar.text_input(
+        "FT Daily Hours (comma separated)",
+        value=st.session_state.ft_daily_hours_input,
+        key="ft_daily_hours_input",
     )
-    pt_daily_hours = st.sidebar.number_input(
-        "PT Daily Hours", 2, 8, value=4, key="pt_daily_hours"
+    pt_daily_hours = st.sidebar.text_input(
+        "PT Daily Hours (comma separated)",
+        value=st.session_state.pt_daily_hours_input,
+        key="pt_daily_hours_input",
     )
     ft_weekly_hours = st.sidebar.number_input(
         "FT Weekly Hours", 30, 60, value=40, key="ft_weekly_hours"
@@ -278,10 +299,24 @@ def main():
 
         if st.button("Solve"):
             with st.spinner("Generating patterns..."):
+                days_cnt = len(df["Day"].unique())
+
+                def _parse_list(val):
+                    if isinstance(val, (int, float)):
+                        return [int(val)] * days_cnt
+                    parts = [p.strip() for p in str(val).split(",") if p.strip()]
+                    nums = [int(p) for p in parts]
+                    if len(nums) < days_cnt:
+                        nums.extend([0] * (days_cnt - len(nums)))
+                    return nums[:days_cnt]
+
+                ft_hours_list = [h * factor for h in _parse_list(ft_daily_hours)]
+                pt_hours_list = [h * factor for h in _parse_list(pt_daily_hours)]
+
                 patterns = generate_patterns(
                     df,
-                    [int(ft_daily_hours * factor)] * len(df["Day"].unique()),
-                    [int(pt_daily_hours * factor)] * len(df["Day"].unique()),
+                    ft_hours_list,
+                    pt_hours_list,
                     break_length,
                     break_window_start,
                     break_window_end,
