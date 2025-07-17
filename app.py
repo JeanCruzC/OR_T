@@ -229,17 +229,33 @@ def main():
     if "pt_weekly_hours" not in st.session_state:
         st.session_state.pt_weekly_hours = 20
 
-    templates = {
-        "Custom": None,
-        "4x12 FT / 6,6,4,4,4 PT": {
-            "ft": [12, 12, 12, 12],
-            "pt": [6, 6, 4, 4, 4],
-        },
-        "10,10,10,10,8 FT / 6,6,4,4,4 PT": {
-            "ft": [10, 10, 10, 10, 8],
-            "pt": [6, 6, 4, 4, 4],
-        },
+    # Predefined daily hour patterns. Each pattern name maps to a list of
+    # hours for the days of the week.  We build all combinations of the full-
+    # time and part-time patterns below so that the solver can try every
+    # possibility.
+    ft_patterns = {
+        "12,12,12,12": [12, 12, 12, 12],
+        "10,10,10,10,8": [10, 10, 10, 10, 8],
+        "10,10,10,9,9": [10, 10, 10, 9, 9],
+        "12,12,8,8,8": [12, 12, 8, 8, 8],
+        "12,10,10,8,8": [12, 10, 10, 8, 8],
+        "11,11,9,9,8": [11, 11, 9, 9, 8],
+        "12,12,12,6,6": [12, 12, 12, 6, 6],
+        "8,8,8,8,8,8": [8, 8, 8, 8, 8, 8],
     }
+
+    pt_patterns = {
+        "6,6,6,6": [6, 6, 6, 6],
+        "6,6,4,4,4": [6, 6, 4, 4, 4],
+        "6,5,5,4,4": [6, 5, 5, 4, 4],
+        "4,4,4,4,4,4": [4, 4, 4, 4, 4, 4],
+    }
+
+    templates = {"Custom": None}
+    for ft_name, ft in ft_patterns.items():
+        for pt_name, pt in pt_patterns.items():
+            name = f"{ft_name} FT / {pt_name} PT"
+            templates[name] = {"ft": ft, "pt": pt}
 
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
     ft_daily_hours = st.sidebar.text_input(
