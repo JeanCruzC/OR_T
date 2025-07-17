@@ -28,3 +28,11 @@ Once the file is uploaded you can experiment with the predefined shift
 templates or provide your own daily hours. The application generates all
 possible patterns, solves the coverage model and reports the resulting
 schedule and coverage percentage.
+
+### Break window configuration
+
+The break window is defined by two offsets from the start of the shift:
+
+* **Break Window Start** – earliest slot where a break may begin.
+* **Break Window End** – last slot where a break may begin. The window must
+  be wide enough to fit the chosen break length.

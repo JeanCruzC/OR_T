@@ -89,6 +89,11 @@ def generate_patterns(
 ):
     """Generate possible weekly patterns for FT and PT employees.
 
+    ``break_window_start`` and ``break_window_end`` are slot offsets counted
+    from the start of the shift. ``break_window_end`` marks the last slot where
+    a break may *start*. The window must be wide enough to fit the requested
+    ``break_length``.
+
     ``ft_daily_hours`` and ``pt_daily_hours`` may be either a single integer or
     a list of hours for each day of the week. When a list is provided the length
     must match the number of days in ``df`` and allows each day of the pattern
@@ -111,6 +116,14 @@ def generate_patterns(
 
     max_ft_hours = max(ft_daily_hours) if ft_daily_hours else 0
     max_pt_hours = max(pt_daily_hours) if pt_daily_hours else 0
+
+    # Parameter validation
+    if break_length <= 0:
+        raise ValueError("break_length must be positive")
+    if break_window_end <= break_window_start:
+        raise ValueError("break_window_end must be greater than break_window_start")
+    if break_window_end - break_window_start < break_length:
+        raise ValueError("Break window is smaller than break_length")
 
     # Full-time patterns with break positions
     for start in range(1, S - max_ft_hours + 2):
@@ -276,10 +289,13 @@ def main():
     )
     break_length = st.sidebar.number_input("Break Length (slots)", 1, 3, value=1)
     break_window_start = st.sidebar.number_input(
-        "Break Window Start (slot offset)", 1, 6, value=3
+        "Break Window Start (slot offset from start)", 1, 6, value=3
     )
     break_window_end = st.sidebar.number_input(
-        "Break Window End (slot offset)", break_window_start + break_length, 8, value=5
+        "Break Window End (slot offset from start)",
+        break_window_start + break_length,
+        8,
+        value=5,
     )
 
     factor = 60 // slot_minutes
@@ -296,6 +312,13 @@ def main():
 
         if st.button("Solve"):
             days_cnt = len(df["Day"].unique())
+
+            if break_window_end <= break_window_start:
+                st.error("Break window end must be greater than start")
+                return
+            if break_window_end - break_window_start < break_length:
+                st.error("Break window is smaller than break length")
+                return
 
             def _parse_list(val):
                 if isinstance(val, (int, float)):
