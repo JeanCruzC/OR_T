@@ -8,6 +8,20 @@ from io import BytesIO
 # Length of each time slot in minutes. Set via UI in the Streamlit app.
 DEFAULT_SLOT_MINUTES = 60
 
+# Predefined FT/PT templates available in the sidebar. "Custom" means the
+# user-provided hour lists from the text inputs will be used.
+TEMPLATES = {
+    "Custom": None,
+    "4x12 FT / 6,6,4,4,4 PT": {
+        "ft": [12, 12, 12, 12],
+        "pt": [6, 6, 4, 4, 4],
+    },
+    "10,10,10,10,8 FT / 6,6,4,4,4 PT": {
+        "ft": [10, 10, 10, 10, 8],
+        "pt": [6, 6, 4, 4, 4],
+    },
+}
+
 # ------------------------ Helper functions ------------------------
 
 
@@ -229,19 +243,23 @@ def main():
     if "pt_weekly_hours" not in st.session_state:
         st.session_state.pt_weekly_hours = 20
 
-    templates = {
-        "Custom": None,
-        "4x12 FT / 6,6,4,4,4 PT": {
-            "ft": [12, 12, 12, 12],
-            "pt": [6, 6, 4, 4, 4],
-        },
-        "10,10,10,10,8 FT / 6,6,4,4,4 PT": {
-            "ft": [10, 10, 10, 10, 8],
-            "pt": [6, 6, 4, 4, 4],
-        },
-    }
+    if "template_select" not in st.session_state:
+        st.session_state.template_select = "Custom"
+
+    def on_template_change():
+        name = st.session_state.template_select
+        cfg = TEMPLATES.get(name)
+        if cfg:
+            st.session_state.ft_daily_hours_input = ",".join(map(str, cfg["ft"]))
+            st.session_state.pt_daily_hours_input = ",".join(map(str, cfg["pt"]))
 
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
+    st.sidebar.selectbox(
+        "Template",
+        list(TEMPLATES.keys()),
+        key="template_select",
+        on_change=on_template_change,
+    )
     ft_daily_hours = st.sidebar.text_input(
         "FT Daily Hours (comma separated)",
         value=st.session_state.ft_daily_hours_input,
@@ -293,152 +311,134 @@ def main():
                     nums.extend([0] * (days_cnt - len(nums)))
                 return nums[:days_cnt]
 
-            best_used = None
-            best_obj = None
-            best_template = None
-            best_patterns = None
-
-            for name, cfg in templates.items():
-                if cfg is None:
-                    ft_list = _parse_list(ft_daily_hours)
-                    pt_list = _parse_list(pt_daily_hours)
-                else:
-                    ft_list = _parse_list(cfg["ft"])
-                    pt_list = _parse_list(cfg["pt"])
-
-                ft_slots = [h * factor for h in ft_list]
-                pt_slots = [h * factor for h in pt_list]
-
-                patterns = generate_patterns(
-                    df,
-                    ft_slots,
-                    pt_slots,
-                    break_length,
-                    break_window_start,
-                    break_window_end,
-                )
-
-                used, obj = solve_schedule(df, patterns)
-
-                if used is None:
-                    continue
-
-                if best_obj is None or obj < best_obj:
-                    best_obj = obj
-                    best_used = used
-                    best_template = name
-                    best_patterns = patterns
-
-            if best_used is None:
-                st.error("No feasible solution found for any template")
+            selected_template = st.session_state.template_select
+            cfg = TEMPLATES.get(selected_template)
+            if cfg is None:
+                ft_list = _parse_list(ft_daily_hours)
+                pt_list = _parse_list(pt_daily_hours)
             else:
-                st.success(
-                    f"Template '{best_template}' selected with minimum employees required: {int(best_obj)}"
+                ft_list = _parse_list(cfg["ft"])
+                pt_list = _parse_list(cfg["pt"])
+
+            ft_slots = [h * factor for h in ft_list]
+            pt_slots = [h * factor for h in pt_list]
+
+            patterns = generate_patterns(
+                df,
+                ft_slots,
+                pt_slots,
+                break_length,
+                break_window_start,
+                break_window_end,
+            )
+
+            used, obj = solve_schedule(df, patterns)
+
+            if used is None:
+                st.error("No feasible solution found for the selected template")
+                return
+
+            st.success(
+                f"Template '{selected_template}' employees required: {int(obj)}"
+            )
+            st.info(
+                f"Generated {len(patterns)} patterns for template '{selected_template}'"
+            )
+            res_rows = []
+            for u in used:
+                p = u["pattern"]
+                res_rows.append(
+                    {
+                        "Type": p["type"],
+                        "Days": ",".join(map(str, p["days"])),
+                        "Start": p["start"],
+                        "Break": p["break"],
+                        "Count": u["count"],
+                    }
                 )
-                used = best_used
-                patterns = best_patterns
-                st.info(
-                    f"Generated {len(patterns)} patterns for template '{best_template}'"
-                )
-                res_rows = []
-                for u in used:
-                    p = u["pattern"]
-                    res_rows.append(
-                        {
-                            "Type": p["type"],
-                            "Days": ",".join(map(str, p["days"])),
-                            "Start": p["start"],
-                            "Break": p["break"],
-                            "Count": u["count"],
-                        }
-                    )
-                st.dataframe(pd.DataFrame(res_rows))
+            st.dataframe(pd.DataFrame(res_rows))
 
-                # --- Detailed schedule with employee IDs ---
-                schedule_rows = []
-                emp_id = 1
-                for u in used:
-                    pattern = u["pattern"]
-                    for _ in range(u["count"]):
-                        eid = f"E{emp_id:03d}"
-                        for d in pattern["days"]:
-                            daily_slots = pattern["daily_slots"][d]
-                            end = pattern["start"] + daily_slots - 1
-                            schedule_rows.append(
-                                {
-                                    "EmployeeID": eid,
-                                    "Day": d,
-                                    "Start": pattern["start"],
-                                    "End": end,
-                                    "BreakStart": (
-                                        pattern["break"]
-                                        if pattern["type"] == "FT"
-                                        else None
-                                    ),
-                                }
-                            )
-                        emp_id += 1
-                schedule_df = pd.DataFrame(schedule_rows)
-                st.dataframe(schedule_df)
+            # --- Detailed schedule with employee IDs ---
+            schedule_rows = []
+            emp_id = 1
+            for u in used:
+                pattern = u["pattern"]
+                for _ in range(u["count"]):
+                    eid = f"E{emp_id:03d}"
+                    for d in pattern["days"]:
+                        daily_slots = pattern["daily_slots"][d]
+                        end = pattern["start"] + daily_slots - 1
+                        schedule_rows.append(
+                            {
+                                "EmployeeID": eid,
+                                "Day": d,
+                                "Start": pattern["start"],
+                                "End": end,
+                                "BreakStart": (
+                                    pattern["break"] if pattern["type"] == "FT" else None
+                                ),
+                            }
+                        )
+                    emp_id += 1
+            schedule_df = pd.DataFrame(schedule_rows)
+            st.dataframe(schedule_df)
 
-                csv = schedule_df.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "Download schedule CSV",
-                    csv,
-                    "schedule.csv",
-                    "text/csv",
-                )
+            csv = schedule_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download schedule CSV",
+                csv,
+                "schedule.csv",
+                "text/csv",
+            )
 
-                xlsx = BytesIO()
-                schedule_df.to_excel(xlsx, index=False)
-                st.download_button(
-                    "Download schedule Excel",
-                    xlsx.getvalue(),
-                    "schedule.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
+            xlsx = BytesIO()
+            schedule_df.to_excel(xlsx, index=False)
+            st.download_button(
+                "Download schedule Excel",
+                xlsx.getvalue(),
+                "schedule.xlsx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
 
-                # --- Compute scheduled coverage per (Day, Slot) ---
-                cov_df = df.copy()
-                cov_df["Scheduled"] = 0
-                for u in used:
-                    pattern = u["pattern"]
-                    count = u["count"]
-                    for d, s in pattern["coverage"]:
-                        cov_df.loc[
-                            (cov_df["Day"] == d) & (cov_df["Slot"] == s), "Scheduled"
-                        ] += count
+            # --- Compute scheduled coverage per (Day, Slot) ---
+            cov_df = df.copy()
+            cov_df["Scheduled"] = 0
+            for u in used:
+                pattern = u["pattern"]
+                count = u["count"]
+                for d, s in pattern["coverage"]:
+                    cov_df.loc[(cov_df["Day"] == d) & (cov_df["Slot"] == s), "Scheduled"] += count
 
-                cov_df["Coverage %"] = cov_df["Scheduled"] / cov_df["Demand"] * 100
+            cov_df["Coverage %"] = cov_df["Scheduled"] / cov_df["Demand"] * 100
 
-                st.write("Coverage by Day and Slot", cov_df)
+            st.write("Coverage by Day and Slot", cov_df)
 
-                # --- Visualization of coverage percentage ---
-                pivot = cov_df.pivot(index="Slot", columns="Day", values="Coverage %")
-                st.line_chart(pivot)
+            # --- Visualization of coverage percentage ---
+            pivot = cov_df.pivot(index="Slot", columns="Day", values="Coverage %")
+            st.line_chart(pivot)
 
-                # --- Efficiency summary ---
-                demand_hours = cov_df["Demand"].sum() * slot_minutes / 60
-                demand_met = (
-                    cov_df[["Scheduled", "Demand"]]
-                    .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
-                    .sum() * slot_minutes / 60
-                )
-                agent_hours = cov_df["Scheduled"].sum() * slot_minutes / 60
+            # --- Efficiency summary ---
+            demand_hours = cov_df["Demand"].sum() * slot_minutes / 60
+            demand_met = (
+                cov_df[["Scheduled", "Demand"]]
+                .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
+                .sum() * slot_minutes / 60
+            )
+            agent_hours = cov_df["Scheduled"].sum() * slot_minutes / 60
 
-                eff_coverage = demand_met / demand_hours * 100 if demand_hours else 0
-                eff_util = demand_met / agent_hours * 100 if agent_hours else 0
+            eff_coverage = demand_met / demand_hours * 100 if demand_hours else 0
+            eff_util = demand_met / agent_hours * 100 if agent_hours else 0
 
-                st.metric(
-                    "Demand Hours Covered",
-                    f"{demand_met:.1f} / {demand_hours}",
-                    f"{eff_coverage:.1f}%",
-                )
-                st.metric(
-                    "Agent Hour Utilization",
-                    f"{demand_met:.1f} / {agent_hours}",
-                    f"{eff_util:.1f}%",
-                )
+            st.metric(
+                "Demand Hours Covered",
+                f"{demand_met:.1f} / {demand_hours}",
+                f"{eff_coverage:.1f}%",
+            )
+            st.metric(
+                "Agent Hour Utilization",
+                f"{demand_met:.1f} / {agent_hours}",
+                f"{eff_util:.1f}%",
+            )
 
 
 if __name__ == "__main__":
