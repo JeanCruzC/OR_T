@@ -81,65 +81,97 @@ def load_demand(uploaded_file: bytes, slot_minutes: int) -> pd.DataFrame:
 
 def generate_patterns(
     df: pd.DataFrame,
-    ft_daily_hours: int,
-    pt_daily_hours: int,
-    ft_weekly_hours: int,
-    pt_weekly_hours: int,
+    ft_daily_hours,
+    pt_daily_hours,
     break_length: int,
     break_window_start: int,
     break_window_end: int,
 ):
-    """Generate possible weekly patterns for FT and PT employees."""
+    """Generate possible weekly patterns for FT and PT employees.
+
+    ``ft_daily_hours`` and ``pt_daily_hours`` may be either a single integer or
+    a list of hours for each day of the week. When a list is provided the length
+    must match the number of days in ``df`` and allows each day of the pattern
+    to have a different duration.
+    """
     days = sorted(df["Day"].unique())
     slots = sorted(df["Slot"].unique())
     S = len(slots)
     patterns = []
     p_id = 0
 
-    def day_combos(num_days):
-        return list(combinations(days, num_days)) if num_days <= len(days) else []
+    # Allow passing a single value for all days
+    if isinstance(ft_daily_hours, (int, float)):
+        ft_daily_hours = [int(ft_daily_hours)] * len(days)
+    if isinstance(pt_daily_hours, (int, float)):
+        pt_daily_hours = [int(pt_daily_hours)] * len(days)
 
-    ft_days = ft_weekly_hours // ft_daily_hours
-    pt_days = pt_weekly_hours // pt_daily_hours
+    if len(ft_daily_hours) != len(days) or len(pt_daily_hours) != len(days):
+        raise ValueError("Daily hour lists must match number of days")
+
+    max_ft_hours = max(ft_daily_hours) if ft_daily_hours else 0
+    max_pt_hours = max(pt_daily_hours) if pt_daily_hours else 0
 
     # Full-time patterns with break positions
-    for combo in day_combos(ft_days):
-        for start in range(1, S - ft_daily_hours + 2):
-            for brk in range(
-                start + break_window_start,
-                start + break_window_end - break_length + 1,
-            ):
-                coverage = []
-                for d in combo:
-                    for s in range(start, start + ft_daily_hours):
-                        if not (brk <= s < brk + break_length):
-                            coverage.append((d, s))
+    for start in range(1, S - max_ft_hours + 2):
+        for brk in range(
+            start + break_window_start,
+            start + break_window_end - break_length + 1,
+        ):
+            coverage = []
+            day_list = []
+            daily_slots = {}
+            valid = True
+            for d, hrs in zip(days, ft_daily_hours):
+                if hrs <= 0:
+                    continue
+                if start + hrs - 1 > S or brk + break_length - 1 > start + hrs - 1:
+                    valid = False
+                    break
+                day_list.append(d)
+                daily_slots[d] = hrs
+                for s in range(start, start + hrs):
+                    if not (brk <= s < brk + break_length):
+                        coverage.append((d, s))
+            if valid and day_list:
                 patterns.append(
                     {
                         "id": p_id,
                         "type": "FT",
-                        "days": combo,
+                        "days": tuple(day_list),
                         "start": start,
                         "break": brk,
+                        "daily_slots": daily_slots,
                         "coverage": set(coverage),
                     }
                 )
                 p_id += 1
 
     # Part-time patterns (no break)
-    for combo in day_combos(pt_days):
-        for start in range(1, S - pt_daily_hours + 2):
-            coverage = []
-            for d in combo:
-                for s in range(start, start + pt_daily_hours):
-                    coverage.append((d, s))
+    for start in range(1, S - max_pt_hours + 2):
+        coverage = []
+        day_list = []
+        daily_slots = {}
+        valid = True
+        for d, hrs in zip(days, pt_daily_hours):
+            if hrs <= 0:
+                continue
+            if start + hrs - 1 > S:
+                valid = False
+                break
+            day_list.append(d)
+            daily_slots[d] = hrs
+            for s in range(start, start + hrs):
+                coverage.append((d, s))
+        if valid and day_list:
             patterns.append(
                 {
                     "id": p_id,
                     "type": "PT",
-                    "days": combo,
+                    "days": tuple(day_list),
                     "start": start,
                     "break": None,
+                    "daily_slots": daily_slots,
                     "coverage": set(coverage),
                 }
             )
@@ -217,10 +249,8 @@ def main():
             with st.spinner("Generating patterns..."):
                 patterns = generate_patterns(
                     df,
-                    int(ft_daily_hours * factor),
-                    int(pt_daily_hours * factor),
-                    int(ft_weekly_hours * factor),
-                    int(pt_weekly_hours * factor),
+                    [int(ft_daily_hours * factor)] * len(df["Day"].unique()),
+                    [int(pt_daily_hours * factor)] * len(df["Day"].unique()),
                     break_length,
                     break_window_start,
                     break_window_end,
@@ -255,13 +285,9 @@ def main():
                     pattern = u["pattern"]
                     for _ in range(u["count"]):
                         eid = f"E{emp_id:03d}"
-                        daily_slots = (
-                            int(ft_daily_hours * factor)
-                            if pattern["type"] == "FT"
-                            else int(pt_daily_hours * factor)
-                        )
-                        end = pattern["start"] + daily_slots - 1
                         for d in pattern["days"]:
+                            daily_slots = pattern["daily_slots"][d]
+                            end = pattern["start"] + daily_slots - 1
                             schedule_rows.append(
                                 {
                                     "EmployeeID": eid,
