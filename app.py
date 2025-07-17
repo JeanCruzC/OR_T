@@ -86,13 +86,17 @@ def generate_patterns(
     break_length: int,
     break_window_start: int,
     break_window_end: int,
+    ft_weekly_slots: int | None = None,
+    pt_weekly_slots: int | None = None,
 ):
     """Generate possible weekly patterns for FT and PT employees.
 
     ``ft_daily_hours`` and ``pt_daily_hours`` may be either a single integer or
     a list of hours for each day of the week. When a list is provided the length
     must match the number of days in ``df`` and allows each day of the pattern
-    to have a different duration.
+    to have a different duration. ``ft_weekly_slots`` and ``pt_weekly_slots``
+    limit the total number of slots across all work days in each generated
+    pattern.
     """
     days = sorted(df["Day"].unique())
     slots = sorted(df["Slot"].unique())
@@ -112,70 +116,87 @@ def generate_patterns(
     max_ft_hours = max(ft_daily_hours) if ft_daily_hours else 0
     max_pt_hours = max(pt_daily_hours) if pt_daily_hours else 0
 
+    ft_day_hours = [(d, h) for d, h in zip(days, ft_daily_hours) if h > 0]
+    pt_day_hours = [(d, h) for d, h in zip(days, pt_daily_hours) if h > 0]
+
+    def _valid_subsets(day_hours, limit):
+        if not day_hours:
+            return []
+        idx = range(len(day_hours))
+        results = []
+        for r in range(1, len(day_hours) + 1):
+            for combo in combinations(idx, r):
+                subset = [day_hours[i] for i in combo]
+                total = sum(h for _, h in subset)
+                if limit is None or total <= limit:
+                    results.append(subset)
+        return results
+
+    ft_subsets = _valid_subsets(ft_day_hours, ft_weekly_slots)
+    pt_subsets = _valid_subsets(pt_day_hours, pt_weekly_slots)
+
     # Full-time patterns with break positions
     for start in range(1, S - max_ft_hours + 2):
         for brk in range(
             start + break_window_start,
             start + break_window_end - break_length + 1,
         ):
+            for subset in ft_subsets:
+                coverage = []
+                day_list = []
+                daily_slots = {}
+                valid = True
+                for d, hrs in subset:
+                    if start + hrs - 1 > S or brk + break_length - 1 > start + hrs - 1:
+                        valid = False
+                        break
+                    day_list.append(d)
+                    daily_slots[d] = hrs
+                    for s in range(start, start + hrs):
+                        if not (brk <= s < brk + break_length):
+                            coverage.append((d, s))
+                if valid and day_list:
+                    patterns.append(
+                        {
+                            "id": p_id,
+                            "type": "FT",
+                            "days": tuple(day_list),
+                            "start": start,
+                            "break": brk,
+                            "daily_slots": daily_slots,
+                            "coverage": set(coverage),
+                        }
+                    )
+                    p_id += 1
+
+    # Part-time patterns (no break)
+    for start in range(1, S - max_pt_hours + 2):
+        for subset in pt_subsets:
             coverage = []
             day_list = []
             daily_slots = {}
             valid = True
-            for d, hrs in zip(days, ft_daily_hours):
-                if hrs <= 0:
-                    continue
-                if start + hrs - 1 > S or brk + break_length - 1 > start + hrs - 1:
+            for d, hrs in subset:
+                if start + hrs - 1 > S:
                     valid = False
                     break
                 day_list.append(d)
                 daily_slots[d] = hrs
                 for s in range(start, start + hrs):
-                    if not (brk <= s < brk + break_length):
-                        coverage.append((d, s))
+                    coverage.append((d, s))
             if valid and day_list:
                 patterns.append(
                     {
                         "id": p_id,
-                        "type": "FT",
+                        "type": "PT",
                         "days": tuple(day_list),
                         "start": start,
-                        "break": brk,
+                        "break": None,
                         "daily_slots": daily_slots,
                         "coverage": set(coverage),
                     }
                 )
                 p_id += 1
-
-    # Part-time patterns (no break)
-    for start in range(1, S - max_pt_hours + 2):
-        coverage = []
-        day_list = []
-        daily_slots = {}
-        valid = True
-        for d, hrs in zip(days, pt_daily_hours):
-            if hrs <= 0:
-                continue
-            if start + hrs - 1 > S:
-                valid = False
-                break
-            day_list.append(d)
-            daily_slots[d] = hrs
-            for s in range(start, start + hrs):
-                coverage.append((d, s))
-        if valid and day_list:
-            patterns.append(
-                {
-                    "id": p_id,
-                    "type": "PT",
-                    "days": tuple(day_list),
-                    "start": start,
-                    "break": None,
-                    "daily_slots": daily_slots,
-                    "coverage": set(coverage),
-                }
-            )
-            p_id += 1
 
     return patterns
 
@@ -324,6 +345,8 @@ def main():
 
                 ft_slots = [h * factor for h in ft_list]
                 pt_slots = [h * factor for h in pt_list]
+                ft_limit = int(ft_weekly_hours) * factor if ft_weekly_hours else None
+                pt_limit = int(pt_weekly_hours) * factor if pt_weekly_hours else None
 
                 patterns = generate_patterns(
                     df,
@@ -332,6 +355,8 @@ def main():
                     break_length,
                     break_window_start,
                     break_window_end,
+                    ft_limit,
+                    pt_limit,
                 )
 
                 used, obj = solve_schedule(df, patterns)

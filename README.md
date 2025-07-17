@@ -28,3 +28,8 @@ Once the file is uploaded you can experiment with the predefined shift
 templates or provide your own daily hours. The application generates all
 possible patterns, solves the coverage model and reports the resulting
 schedule and coverage percentage.
+
+The sidebar also contains fields for the maximum number of hours a full-time
+or part-time employee may work in a week.  When patterns are generated these
+weekly limits are enforced so that no proposed schedule exceeds the allowed
+hours.
