@@ -89,7 +89,8 @@ def generate_patterns(
     for combo in day_combos(ft_days):
         for start in range(1, S - ft_daily_hours + 2):
             for brk in range(
-                start + break_window_start, start + break_window_end - break_length + 2
+                start + break_window_start,
+                start + break_window_end - break_length + 1,
             ):
                 coverage = []
                 for d in combo:
