@@ -241,25 +241,6 @@ def main():
         },
     }
 
-    def apply_template():
-        cfg = templates.get(st.session_state.template)
-        if cfg:
-            st.session_state.ft_daily_hours_input = ", ".join(
-                map(str, cfg["ft"])
-            )
-            st.session_state.pt_daily_hours_input = ", ".join(
-                map(str, cfg["pt"])
-            )
-            st.session_state.ft_weekly_hours = sum(cfg["ft"])
-            st.session_state.pt_weekly_hours = sum(cfg["pt"])
-
-    st.sidebar.selectbox(
-        "Shift Template",
-        list(templates.keys()),
-        key="template",
-        on_change=apply_template,
-    )
-
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
     ft_daily_hours = st.sidebar.text_input(
         "FT Daily Hours (comma separated)",
@@ -298,38 +279,67 @@ def main():
             return
 
         if st.button("Solve"):
-            with st.spinner("Generating patterns..."):
-                days_cnt = len(df["Day"].unique())
+            days_cnt = len(df["Day"].unique())
 
-                def _parse_list(val):
-                    if isinstance(val, (int, float)):
-                        return [int(val)] * days_cnt
+            def _parse_list(val):
+                if isinstance(val, (int, float)):
+                    return [int(val)] * days_cnt
+                if isinstance(val, list):
+                    nums = [int(v) for v in val]
+                else:
                     parts = [p.strip() for p in str(val).split(",") if p.strip()]
                     nums = [int(p) for p in parts]
-                    if len(nums) < days_cnt:
-                        nums.extend([0] * (days_cnt - len(nums)))
-                    return nums[:days_cnt]
+                if len(nums) < days_cnt:
+                    nums.extend([0] * (days_cnt - len(nums)))
+                return nums[:days_cnt]
 
-                ft_hours_list = [h * factor for h in _parse_list(ft_daily_hours)]
-                pt_hours_list = [h * factor for h in _parse_list(pt_daily_hours)]
+            best_used = None
+            best_obj = None
+            best_template = None
+            best_patterns = None
+
+            for name, cfg in templates.items():
+                if cfg is None:
+                    ft_list = _parse_list(ft_daily_hours)
+                    pt_list = _parse_list(pt_daily_hours)
+                else:
+                    ft_list = _parse_list(cfg["ft"])
+                    pt_list = _parse_list(cfg["pt"])
+
+                ft_slots = [h * factor for h in ft_list]
+                pt_slots = [h * factor for h in pt_list]
 
                 patterns = generate_patterns(
                     df,
-                    ft_hours_list,
-                    pt_hours_list,
+                    ft_slots,
+                    pt_slots,
                     break_length,
                     break_window_start,
                     break_window_end,
                 )
-            st.success(f"Generated {len(patterns)} patterns")
 
-            with st.spinner("Solving model..."):
                 used, obj = solve_schedule(df, patterns)
 
-            if used is None:
-                st.error("No feasible solution found")
+                if used is None:
+                    continue
+
+                if best_obj is None or obj < best_obj:
+                    best_obj = obj
+                    best_used = used
+                    best_template = name
+                    best_patterns = patterns
+
+            if best_used is None:
+                st.error("No feasible solution found for any template")
             else:
-                st.success(f"Minimum employees required: {int(obj)}")
+                st.success(
+                    f"Template '{best_template}' selected with minimum employees required: {int(best_obj)}"
+                )
+                used = best_used
+                patterns = best_patterns
+                st.info(
+                    f"Generated {len(patterns)} patterns for template '{best_template}'"
+                )
                 res_rows = []
                 for u in used:
                     p = u["pattern"]
