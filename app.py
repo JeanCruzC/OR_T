@@ -200,7 +200,6 @@ def main():
         "Break Window End (slot offset)", break_window_start + break_length, 8, value=5
     )
 
-    slots_per_day = 24 * 60 // slot_minutes
     factor = 60 // slot_minutes
 
     uploaded_file = st.file_uploader("Upload Demand Excel", type=["xlsx", "xls"])
