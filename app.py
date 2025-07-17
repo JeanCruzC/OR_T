@@ -220,6 +220,36 @@ def main():
                     )
                 st.dataframe(pd.DataFrame(res_rows))
 
+                # --- Compute scheduled coverage per (Day, Slot) ---
+                cov_df = df.copy()
+                cov_df["Scheduled"] = 0
+                for u in used:
+                    pattern = u["pattern"]
+                    count = u["count"]
+                    for d, s in pattern["coverage"]:
+                        cov_df.loc[(cov_df["Day"] == d) & (cov_df["Slot"] == s), "Scheduled"] += count
+
+                cov_df["Coverage %"] = cov_df["Scheduled"] / cov_df["Demand"] * 100
+
+                st.write("Coverage by Day and Slot", cov_df)
+
+                # --- Visualization of coverage percentage ---
+                pivot = cov_df.pivot(index="Slot", columns="Day", values="Coverage %")
+                st.line_chart(pivot)
+
+                # --- Efficiency summary ---
+                demand_hours = cov_df["Demand"].sum()
+                demand_met = (cov_df[["Scheduled", "Demand"]]
+                              .apply(lambda r: min(r["Scheduled"], r["Demand"]), axis=1)
+                              .sum())
+                agent_hours = cov_df["Scheduled"].sum()
+
+                eff_coverage = demand_met / demand_hours * 100 if demand_hours else 0
+                eff_util = demand_met / agent_hours * 100 if agent_hours else 0
+
+                st.metric("Demand Hours Covered", f"{demand_met:.1f} / {demand_hours}", f"{eff_coverage:.1f}%")
+                st.metric("Agent Hour Utilization", f"{demand_met:.1f} / {agent_hours}", f"{eff_util:.1f}%")
+
 
 if __name__ == "__main__":
     main()
