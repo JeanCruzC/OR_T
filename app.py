@@ -187,11 +187,43 @@ def main():
     st.title("Workforce Scheduling with OR-Tools")
 
     st.sidebar.header("Configuration")
+
+    if "ft_daily_hours" not in st.session_state:
+        st.session_state.ft_daily_hours = 8
+    if "pt_daily_hours" not in st.session_state:
+        st.session_state.pt_daily_hours = 4
+    if "ft_weekly_hours" not in st.session_state:
+        st.session_state.ft_weekly_hours = 40
+    if "pt_weekly_hours" not in st.session_state:
+        st.session_state.pt_weekly_hours = 20
+
+    def apply_template():
+        if st.session_state.template == "48h FT / 24h PT":
+            st.session_state.ft_daily_hours = 8
+            st.session_state.ft_weekly_hours = 48
+            st.session_state.pt_daily_hours = 4
+            st.session_state.pt_weekly_hours = 24
+
+    st.sidebar.selectbox(
+        "Shift Template",
+        ["Custom", "48h FT / 24h PT"],
+        key="template",
+        on_change=apply_template,
+    )
+
     slot_minutes = st.sidebar.selectbox("Minutes per Slot", [60, 30], index=0)
-    ft_daily_hours = st.sidebar.number_input("FT Daily Hours", 6, 12, value=8)
-    pt_daily_hours = st.sidebar.number_input("PT Daily Hours", 2, 8, value=4)
-    ft_weekly_hours = st.sidebar.number_input("FT Weekly Hours", 30, 60, value=40)
-    pt_weekly_hours = st.sidebar.number_input("PT Weekly Hours", 10, 30, value=20)
+    ft_daily_hours = st.sidebar.number_input(
+        "FT Daily Hours", 6, 12, value=8, key="ft_daily_hours"
+    )
+    pt_daily_hours = st.sidebar.number_input(
+        "PT Daily Hours", 2, 8, value=4, key="pt_daily_hours"
+    )
+    ft_weekly_hours = st.sidebar.number_input(
+        "FT Weekly Hours", 30, 60, value=40, key="ft_weekly_hours"
+    )
+    pt_weekly_hours = st.sidebar.number_input(
+        "PT Weekly Hours", 10, 30, value=20, key="pt_weekly_hours"
+    )
     break_length = st.sidebar.number_input("Break Length (slots)", 1, 3, value=1)
     break_window_start = st.sidebar.number_input(
         "Break Window Start (slot offset)", 1, 6, value=3
