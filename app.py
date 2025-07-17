@@ -86,6 +86,9 @@ def generate_patterns(
     break_length: int,
     break_window_start: int,
     break_window_end: int,
+    ft_start_times=None,
+    pt_start_times=None,
+    ft_break_times=None,
 ):
     """Generate possible weekly patterns for FT and PT employees.
 
@@ -93,6 +96,12 @@ def generate_patterns(
     a list of hours for each day of the week. When a list is provided the length
     must match the number of days in ``df`` and allows each day of the pattern
     to have a different duration.
+
+    ``ft_start_times`` and ``pt_start_times`` may optionally specify a list of
+    allowable start slots for each day. When not provided the function uses all
+    valid start slots based on the daily hours. ``ft_break_times`` can be used
+    to supply explicit break start slots for each day, otherwise valid break
+    windows are derived from ``break_window_start``/``break_window_end``.
     """
     days = sorted(df["Day"].unique())
     slots = sorted(df["Slot"].unique())
@@ -109,29 +118,95 @@ def generate_patterns(
     if len(ft_daily_hours) != len(days) or len(pt_daily_hours) != len(days):
         raise ValueError("Daily hour lists must match number of days")
 
-    max_ft_hours = max(ft_daily_hours) if ft_daily_hours else 0
-    max_pt_hours = max(pt_daily_hours) if pt_daily_hours else 0
+    def _norm_list(val, days_cnt):
+        if val is None:
+            return [None] * days_cnt
+        if not isinstance(val, list):
+            val = [val] * days_cnt
+        if len(val) < days_cnt:
+            val.extend([None] * (days_cnt - len(val)))
+        return val[:days_cnt]
 
-    # Full-time patterns with break positions
-    for start in range(1, S - max_ft_hours + 2):
-        for brk in range(
-            start + break_window_start,
-            start + break_window_end - break_length + 1,
-        ):
+    ft_start_times = _norm_list(ft_start_times, len(days))
+    pt_start_times = _norm_list(pt_start_times, len(days))
+    ft_break_times = _norm_list(ft_break_times, len(days))
+
+    def _parse_opts(v):
+        if v is None:
+            return None
+        if isinstance(v, (int, float)):
+            return [int(v)]
+        if isinstance(v, list):
+            return [int(x) for x in v]
+        return [int(p) for p in str(v).split("|") if str(p).strip()]
+
+    ft_start_lists = []
+    pt_start_lists = []
+    for hrs, sts in zip(ft_daily_hours, ft_start_times):
+        if hrs <= 0:
+            ft_start_lists.append([None])
+            continue
+        opts = _parse_opts(sts)
+        if not opts:
+            opts = list(range(1, S - hrs + 2))
+        ft_start_lists.append(opts)
+
+    for hrs, sts in zip(pt_daily_hours, pt_start_times):
+        if hrs <= 0:
+            pt_start_lists.append([None])
+            continue
+        opts = _parse_opts(sts)
+        if not opts:
+            opts = list(range(1, S - hrs + 2))
+        pt_start_lists.append(opts)
+
+    def _break_lists(starts):
+        res = []
+        for i, start in enumerate(starts):
+            hrs = ft_daily_hours[i]
+            if hrs <= 0:
+                res.append([None])
+                continue
+            brk_spec = ft_break_times[i]
+            opts = _parse_opts(brk_spec) if brk_spec is not None else None
+            if opts is None:
+                opts = list(
+                    range(
+                        start + break_window_start,
+                        start + break_window_end - break_length + 1,
+                    )
+                )
+            # Filter invalid break positions
+            opts = [b for b in opts if start <= b <= start + hrs - break_length]
+            if not opts:
+                return None
+            res.append(opts)
+        return res
+
+    # --- Full-time patterns (with breaks) ---
+    for start_tuple in product(*ft_start_lists):
+        brk_lists = _break_lists(start_tuple)
+        if brk_lists is None:
+            continue
+        for brk_tuple in product(*brk_lists):
             coverage = []
             day_list = []
             daily_slots = {}
+            start_map = {}
+            break_map = {}
             valid = True
-            for d, hrs in zip(days, ft_daily_hours):
+            for d, hrs, st, br in zip(days, ft_daily_hours, start_tuple, brk_tuple):
                 if hrs <= 0:
                     continue
-                if start + hrs - 1 > S or brk + break_length - 1 > start + hrs - 1:
+                if st is None or st + hrs - 1 > S or br + break_length - 1 > st + hrs - 1:
                     valid = False
                     break
                 day_list.append(d)
+                start_map[d] = st
+                break_map[d] = br
                 daily_slots[d] = hrs
-                for s in range(start, start + hrs):
-                    if not (brk <= s < brk + break_length):
+                for s in range(st, st + hrs):
+                    if not (br <= s < br + break_length):
                         coverage.append((d, s))
             if valid and day_list:
                 patterns.append(
@@ -139,29 +214,31 @@ def generate_patterns(
                         "id": p_id,
                         "type": "FT",
                         "days": tuple(day_list),
-                        "start": start,
-                        "break": brk,
+                        "start": start_map,
+                        "break": break_map,
                         "daily_slots": daily_slots,
                         "coverage": set(coverage),
                     }
                 )
                 p_id += 1
 
-    # Part-time patterns (no break)
-    for start in range(1, S - max_pt_hours + 2):
+    # --- Part-time patterns (no break) ---
+    for start_tuple in product(*pt_start_lists):
         coverage = []
         day_list = []
         daily_slots = {}
+        start_map = {}
         valid = True
-        for d, hrs in zip(days, pt_daily_hours):
+        for d, hrs, st in zip(days, pt_daily_hours, start_tuple):
             if hrs <= 0:
                 continue
-            if start + hrs - 1 > S:
+            if st is None or st + hrs - 1 > S:
                 valid = False
                 break
             day_list.append(d)
+            start_map[d] = st
             daily_slots[d] = hrs
-            for s in range(start, start + hrs):
+            for s in range(st, st + hrs):
                 coverage.append((d, s))
         if valid and day_list:
             patterns.append(
@@ -169,7 +246,7 @@ def generate_patterns(
                     "id": p_id,
                     "type": "PT",
                     "days": tuple(day_list),
-                    "start": start,
+                    "start": start_map,
                     "break": None,
                     "daily_slots": daily_slots,
                     "coverage": set(coverage),
@@ -224,6 +301,10 @@ def main():
         st.session_state.ft_daily_hours_input = "8"
     if "pt_daily_hours_input" not in st.session_state:
         st.session_state.pt_daily_hours_input = "4"
+    if "ft_start_times_input" not in st.session_state:
+        st.session_state.ft_start_times_input = ""
+    if "pt_start_times_input" not in st.session_state:
+        st.session_state.pt_start_times_input = ""
     if "ft_weekly_hours" not in st.session_state:
         st.session_state.ft_weekly_hours = 40
     if "pt_weekly_hours" not in st.session_state:
@@ -263,10 +344,20 @@ def main():
         value=st.session_state.ft_daily_hours_input,
         key="ft_daily_hours_input",
     )
+    ft_start_times = st.sidebar.text_input(
+        "FT Start Slots per Day (use '|' to separate options)",
+        value=st.session_state.ft_start_times_input,
+        key="ft_start_times_input",
+    )
     pt_daily_hours = st.sidebar.text_input(
         "PT Daily Hours (comma separated)",
         value=st.session_state.pt_daily_hours_input,
         key="pt_daily_hours_input",
+    )
+    pt_start_times = st.sidebar.text_input(
+        "PT Start Slots per Day (use '|' to separate options)",
+        value=st.session_state.pt_start_times_input,
+        key="pt_start_times_input",
     )
     ft_weekly_hours = st.sidebar.number_input(
         "FT Weekly Hours", 30, 60, value=40, key="ft_weekly_hours"
@@ -309,10 +400,28 @@ def main():
                     nums.extend([0] * (days_cnt - len(nums)))
                 return nums[:days_cnt]
 
+            def _parse_starts(val):
+                if val is None or str(val).strip() == "":
+                    return [None] * days_cnt
+                if isinstance(val, list):
+                    parts = val
+                else:
+                    parts = str(val).split(",")
+                res = []
+                for part in parts:
+                    sub = [s for s in str(part).strip().split("|") if s.strip()]
+                    res.append([int(x) for x in sub] if sub else None)
+                if len(res) < days_cnt:
+                    res.extend([None] * (days_cnt - len(res)))
+                return res[:days_cnt]
+
             best_used = None
             best_obj = None
             best_template = None
             best_patterns = None
+
+            ft_start_list = _parse_starts(ft_start_times)
+            pt_start_list = _parse_starts(pt_start_times)
 
             for name, cfg in templates.items():
                 if cfg is None:
@@ -332,6 +441,8 @@ def main():
                     break_length,
                     break_window_start,
                     break_window_end,
+                    ft_start_list,
+                    pt_start_list,
                 )
 
                 used, obj = solve_schedule(df, patterns)
@@ -359,12 +470,19 @@ def main():
                 res_rows = []
                 for u in used:
                     p = u["pattern"]
+                    start_str = ",".join(f"{d}:{p['start'][d]}" for d in p["days"])
+                    if p["break"]:
+                        break_str = ",".join(
+                            f"{d}:{p['break'][d]}" for d in p["days"]
+                        )
+                    else:
+                        break_str = ""
                     res_rows.append(
                         {
                             "Type": p["type"],
                             "Days": ",".join(map(str, p["days"])),
-                            "Start": p["start"],
-                            "Break": p["break"],
+                            "Start": start_str,
+                            "Break": break_str,
                             "Count": u["count"],
                         }
                     )
@@ -379,15 +497,16 @@ def main():
                         eid = f"E{emp_id:03d}"
                         for d in pattern["days"]:
                             daily_slots = pattern["daily_slots"][d]
-                            end = pattern["start"] + daily_slots - 1
+                            start_slot = pattern["start"][d]
+                            end = start_slot + daily_slots - 1
                             schedule_rows.append(
                                 {
                                     "EmployeeID": eid,
                                     "Day": d,
-                                    "Start": pattern["start"],
+                                    "Start": start_slot,
                                     "End": end,
                                     "BreakStart": (
-                                        pattern["break"]
+                                        pattern["break"][d]
                                         if pattern["type"] == "FT"
                                         else None
                                     ),
