@@ -120,16 +120,16 @@ def generate_patterns(
     # Parameter validation
     if break_length <= 0:
         raise ValueError("break_length must be positive")
-    if break_window_end <= break_window_start:
-        raise ValueError("break_window_end must be greater than break_window_start")
-    if break_window_end - break_window_start < break_length:
+    if break_window_end < break_window_start:
+        raise ValueError("break_window_end must be at least break_window_start")
+    if break_window_end - break_window_start + 1 < break_length:
         raise ValueError("Break window is smaller than break_length")
 
     # Full-time patterns with break positions
     for start in range(1, S - max_ft_hours + 2):
         for brk in range(
             start + break_window_start,
-            start + break_window_end - break_length + 1,
+            start + break_window_end + 1,
         ):
             coverage = []
             day_list = []
@@ -293,7 +293,7 @@ def main():
     )
     break_window_end = st.sidebar.number_input(
         "Break Window End (slot offset from start)",
-        break_window_start + break_length,
+        break_window_start + break_length - 1,
         8,
         value=5,
     )
@@ -313,10 +313,10 @@ def main():
         if st.button("Solve"):
             days_cnt = len(df["Day"].unique())
 
-            if break_window_end <= break_window_start:
-                st.error("Break window end must be greater than start")
+            if break_window_end < break_window_start:
+                st.error("Break window end must be at least break window start")
                 return
-            if break_window_end - break_window_start < break_length:
+            if break_window_end - break_window_start + 1 < break_length:
                 st.error("Break window is smaller than break length")
                 return
 
