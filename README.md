@@ -16,6 +16,12 @@ part-time patterns so that demand coverage is maximized with the minimum number 
    streamlit run app.py
    ```
 
+## Usage
+
+When solving a schedule the app will alert you if no generated pattern
+covers a particular day and slot combination. Adjust your shift templates
+or break settings if this occurs.
+
 ## Demand data
 
 Upload the staffing demand as an Excel file. The spreadsheet must contain the
