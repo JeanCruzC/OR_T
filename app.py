@@ -104,11 +104,19 @@ def generate_patterns(
     patterns = []
     p_id = 0
 
-    # Allow passing a single value for all days
-    if isinstance(ft_daily_hours, (int, float)):
-        ft_daily_hours = [int(ft_daily_hours)] * len(days)
-    if isinstance(pt_daily_hours, (int, float)):
-        pt_daily_hours = [int(pt_daily_hours)] * len(days)
+    # Allow passing a single value for all days.  Some configurations may pass
+    # a list with a single element (e.g. ``[12]``) expecting it to apply to
+    # every day of the week.  Mirror that behaviour here so that both a plain
+    # integer and a single-element list are treated the same.
+    if isinstance(ft_daily_hours, (int, float)) or (
+        isinstance(ft_daily_hours, (list, tuple)) and len(ft_daily_hours) == 1
+    ):
+        ft_daily_hours = [int(ft_daily_hours[0] if isinstance(ft_daily_hours, (list, tuple)) else ft_daily_hours)] * len(days)
+
+    if isinstance(pt_daily_hours, (int, float)) or (
+        isinstance(pt_daily_hours, (list, tuple)) and len(pt_daily_hours) == 1
+    ):
+        pt_daily_hours = [int(pt_daily_hours[0] if isinstance(pt_daily_hours, (list, tuple)) else pt_daily_hours)] * len(days)
 
     if len(ft_daily_hours) != len(days) or len(pt_daily_hours) != len(days):
         raise ValueError("Daily hour lists must match number of days")
