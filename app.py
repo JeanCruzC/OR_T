@@ -221,9 +221,10 @@ def solve_schedule(demand_df: pd.DataFrame, patterns):
         d = int(row["Day"])
         s = int(row["Slot"])
         demand = int(row["Demand"])
-        model.Add(
-            sum(x[p["id"]] for p in patterns if (d, s) in p["coverage"]) >= demand
-        )
+        covering = [x[p["id"]] for p in patterns if (d, s) in p["coverage"]]
+        if not covering:
+            return None, f"No pattern covers Day {d} Slot {s}"
+        model.Add(sum(covering) >= demand)
 
     model.Minimize(sum(x[p["id"]] for p in patterns))
     solver = cp_model.CpSolver()
@@ -370,6 +371,8 @@ def main():
                 used, obj = solve_schedule(df, patterns)
 
                 if used is None:
+                    if obj:
+                        st.error(obj)
                     continue
 
                 if best_obj is None or obj < best_obj:
